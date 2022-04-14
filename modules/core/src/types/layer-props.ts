@@ -1,7 +1,7 @@
 import type {CoordinateSystem} from '../lib/constants';
 import type Layer from '../lib/layer';
 
-import type {NumericArray} from './types';
+import type {ConstructorOf, NumericArray} from './types';
 import type {PickingInfo} from '../lib/picking/pick-info';
 import type {MjolnirEvent} from 'mjolnir.js';
 
@@ -18,7 +18,16 @@ export type AccessorContext<T> = {
   target: number[];
 };
 
-export type Accessor<In, Out> = Out | ((object: In, objectInfo: AccessorContext<In>) => Out);
+export type AccessorFunction<In, Out> = (object: In, objectInfo: AccessorContext<In>) => Out;
+
+export type Accessor<In, Out> = Out | AccessorFunction<In, Out>;
+
+export type Color =
+  | [number, number, number]
+  | [number, number, number, number]
+  | Uint8Array
+  | Uint8ClampedArray;
+export type Unit = 'meters' | 'common' | 'pixels';
 
 // TODO
 type BinaryAttribute = any;
@@ -190,7 +199,7 @@ export type LayerProps<DataType = any> = {
 export type CompositeLayerProps<DataType = any> = LayerProps<DataType> & {
   _subLayerProps: {
     [subLayerId: string]: {
-      type?: typeof Layer;
+      type?: ConstructorOf<Layer>;
       [propName: string]: any;
     };
   };
