@@ -1,16 +1,28 @@
-import {log} from '@deck.gl/core';
+import {
+  assert,
+  ChangeFlags,
+  Layer,
+  log,
+  PickingInfo,
+  Viewport,
+  _GlobeViewport
+} from '@deck.gl/core';
 import {Matrix4} from '@math.gl/core';
 import {MVTWorkerLoader} from '@loaders.gl/mvt';
 import {binaryToGeojson} from '@loaders.gl/gis';
 import {COORDINATE_SYSTEM} from '@deck.gl/core';
 import {ClipExtension} from '@deck.gl/extensions';
 
-import TileLayer from '../tile-layer/tile-layer';
+import TileLayer, {TileLayerProps} from '../tile-layer/tile-layer';
 import {getURLFromTemplate, isURLTemplate} from '../tile-layer/utils';
 import {transform} from './coordinate-transform';
 import findIndexBinary from './find-index-binary';
 
 import {GeoJsonLayer} from '@deck.gl/layers';
+import {Loader} from '@loaders.gl/loader-utils';
+import {Tileset2DProps} from '../tile-layer/tileset-2d';
+import {TileLoadProps} from '../tile-layer/types';
+import Tile2DHeader from '../tile-layer/tile-2d-header';
 
 const WORLD_SIZE = 512;
 
@@ -22,11 +34,33 @@ const defaultProps = {
   binary: true
 };
 
-export default class MVTLayer extends TileLayer {
+export type MVTLayerProps = TileLayerProps & {
+  /** Called if `data` is a TileJSON URL when it is successfully fetched. */
+  onDataLoad: ((tilejson: any) => void) | undefined;
+
+  /** Needed for highlighting a feature split across two or more tiles. */
+  uniqueIdProperty: string;
+
+  /** A feature with ID corresponding to the supplied value will be highlighted */
+  highlightedFeatureId: string | undefined;
+
+  /** Use tile data in binary format. */
+  binary: boolean;
+
+  loaders: Loader[];
+};
+export default class MVTLayer<PropsT extends MVTLayerProps = MVTLayerProps> extends TileLayer<
+  any,
+  PropsT
+> {
+  static layerName = 'MVTLayer';
+  static defaultProps = defaultProps;
+
   initializeState() {
     super.initializeState();
+    assert(this.context);
     // GlobeView doesn't work well with binary data
-    const binary = this.context.viewport.resolution !== undefined ? false : this.props.binary;
+    const binary = this.context.viewport instanceof _GlobeViewport ? false : this.props.binary;
     this.setState({
       binary,
       data: null,
@@ -34,16 +68,27 @@ export default class MVTLayer extends TileLayer {
     });
   }
 
-  get isLoaded() {
-    return this.state.data && this.state.tileset && super.isLoaded;
+  get isLoaded(): boolean {
+    return this.state && this.state.data && this.state.tileset && super.isLoaded;
   }
 
-  updateState({props, oldProps, context, changeFlags}) {
+  updateState({
+    props,
+    oldProps,
+    context,
+    changeFlags
+  }: {
+    props: PropsT;
+    oldProps: PropsT;
+    context: any;
+    changeFlags: ChangeFlags;
+  }) {
     if (changeFlags.dataChanged) {
+      // eslint-disable-next-line @typescript-eslint/no-floating-promises
       this._updateTileData();
     }
 
-    if (this.state.data) {
+    if (this.state?.data) {
       super.updateState({props, oldProps, context, changeFlags});
       this._setWGS84PropertyForTiles();
     }
@@ -54,22 +99,22 @@ export default class MVTLayer extends TileLayer {
   }
 
   /* eslint-disable complexity */
-  async _updateTileData() {
-    let {data} = this.props;
-    let tileJSON = null;
+  private async _updateTileData() {
+    let data: any = this.props.data;
+    let tileJSON: any = null;
 
     if (typeof data === 'string' && !isURLTemplate(data)) {
       const {onDataLoad, fetch} = this.props;
       this.setState({data: null, tileJSON: null});
       try {
-        tileJSON = await fetch(data, {propName: 'data', layer: this, loaders: []});
-      } catch (error) {
+        tileJSON = await fetch!(data, {propName: 'data', layer: this, loaders: []});
+      } catch (error: any) {
         this.raiseError(error, 'loading TileJSON');
         data = null;
       }
 
       if (onDataLoad) {
-        onDataLoad(tileJSON);
+        onDataLoad(tileJSON, {propName: 'data', layer: this});
       }
     } else if (data.tilejson) {
       tileJSON = data;
@@ -82,7 +127,8 @@ export default class MVTLayer extends TileLayer {
     this.setState({data, tileJSON});
   }
 
-  _getTilesetOptions(props) {
+  _getTilesetOptions(props: PropsT): Tileset2DProps {
+    assert(this.state);
     const opts = super._getTilesetOptions(props);
     const {tileJSON} = this.state;
 
@@ -103,12 +149,14 @@ export default class MVTLayer extends TileLayer {
 
   /* eslint-disable complexity */
 
-  renderLayers() {
-    if (!this.state.data) return null;
+  renderLayers(): Layer[] | null {
+    if (!this.state?.data) return null;
     return super.renderLayers();
   }
 
-  getTileData(tile) {
+  getTileData(tile: TileLoadProps) {
+    assert(this.state && this.context);
+
     const url = getURLFromTemplate(this.state.data, tile);
     if (!url) {
       return Promise.reject('Invalid URL');
@@ -122,7 +170,7 @@ export default class MVTLayer extends TileLayer {
       mimeType: 'application/x-protobuf',
       mvt: {
         ...loadOptions?.mvt,
-        coordinates: this.context.viewport.resolution ? 'wgs84' : 'local',
+        coordinates: this.context.viewport instanceof _GlobeViewport ? 'wgs84' : 'local',
         tileIndex: {x, y, z}
         // Local worker debug
         // workerUrl: `modules/mvt/dist/mvt-loader.worker.js`
@@ -131,10 +179,19 @@ export default class MVTLayer extends TileLayer {
       },
       gis: binary ? {format: 'binary'} : {}
     };
-    return fetch(url, {propName: 'data', layer: this, loadOptions, signal});
+    return fetch!(url, {propName: 'data', layer: this, loadOptions, signal});
   }
 
-  renderSubLayers(props) {
+  renderSubLayers(
+    props: PropsT & {
+      id: string;
+      data: any;
+      _offset: number;
+      tile: Tile2DHeader;
+    }
+  ): Layer | Layer[] {
+    assert(this.state && this.context);
+
     const {tile} = props;
     const worldScale = Math.pow(2, tile.z);
 
@@ -148,7 +205,7 @@ export default class MVTLayer extends TileLayer {
 
     props.autoHighlight = false;
 
-    if (!this.context.viewport.resolution) {
+    if (!(this.context.viewport instanceof _GlobeViewport)) {
       props.modelMatrix = modelMatrix;
       props.coordinateOrigin = [xOffset, yOffset, 0];
       props.coordinateSystem = COORDINATE_SYSTEM.CARTESIAN;
@@ -164,7 +221,9 @@ export default class MVTLayer extends TileLayer {
     return subLayers;
   }
 
-  _updateAutoHighlight(info) {
+  _updateAutoHighlight(info: PickingInfo) {
+    assert(this.state);
+
     const {uniqueIdProperty} = this.props;
 
     const {hoveredFeatureId, hoveredFeatureLayerName} = this.state;
@@ -194,9 +253,10 @@ export default class MVTLayer extends TileLayer {
   }
 
   getPickingInfo(params) {
+    assert(this.state && this.context);
     const info = super.getPickingInfo(params);
 
-    const isWGS84 = this.context.viewport.resolution;
+    const isWGS84 = this.context.viewport instanceof _GlobeViewport;
 
     if (this.state.binary && info.index !== -1) {
       const {data} = params.sourceLayer.props;
@@ -210,13 +270,17 @@ export default class MVTLayer extends TileLayer {
   }
 
   getSubLayerPropsByTile(tile) {
+    assert(this.state);
+
     return {
       highlightedObjectIndex: this.getHighlightedObjectIndex(tile),
       highlightColor: this.state.highlightColor
     };
   }
 
-  getHighlightedObjectIndex(tile) {
+  getHighlightedObjectIndex(tile: Tile2DHeader) {
+    assert(this.state);
+
     const {hoveredFeatureId, hoveredFeatureLayerName, binary} = this.state;
     const {uniqueIdProperty, highlightedFeatureId} = this.props;
     const data = tile.content;
@@ -254,19 +318,21 @@ export default class MVTLayer extends TileLayer {
   }
 
   _pickObjects(maxObjects) {
+    assert(this.context);
+
     const {deck, viewport} = this.context;
     const width = viewport.width;
     const height = viewport.height;
     const x = viewport.x;
     const y = viewport.y;
     const layerIds = [this.id];
-    return deck.pickObjects({x, y, width, height, layerIds, maxObjects});
+    return deck!.pickObjects({x, y, width, height, layerIds, maxObjects});
   }
 
   getRenderedFeatures(maxFeatures = null) {
-    const features = this._pickObjects(maxFeatures);
+    const features: any[] = this._pickObjects(maxFeatures);
     const featureCache = new Set();
-    const renderedFeatures = [];
+    const renderedFeatures: any[] = [];
 
     for (const f of features) {
       const featureId = getFeatureUniqueId(f.object, this.props.uniqueIdProperty);
@@ -285,6 +351,8 @@ export default class MVTLayer extends TileLayer {
   }
 
   _setWGS84PropertyForTiles() {
+    assert(this.state && this.context);
+
     const propName = 'dataInWGS84';
     const {tileset} = this.state;
 
@@ -298,7 +366,7 @@ export default class MVTLayer extends TileLayer {
               return null;
             }
 
-            if (this.state.binary && Array.isArray(tile.content) && !tile.content.length) {
+            if (this.state!.binary && Array.isArray(tile.content) && !tile.content.length) {
               // TODO: @loaders.gl/mvt returns [] when no content. It should return a valid empty binary.
               // https://github.com/visgl/loaders.gl/pull/1137
               return [];
@@ -306,9 +374,9 @@ export default class MVTLayer extends TileLayer {
 
             if (tile._contentWGS84 === undefined) {
               // Create a cache to transform only once
-              const content = this.state.binary ? binaryToGeojson(tile.content) : tile.content;
+              const content = this.state!.binary ? binaryToGeojson(tile.content) : tile.content;
               tile._contentWGS84 = content.map(feature =>
-                transformTileCoordsToWGS84(feature, tile.bbox, this.context.viewport)
+                transformTileCoordsToWGS84(feature, tile.bbox, this.context!.viewport)
               );
             }
             return tile._contentWGS84;
@@ -339,7 +407,7 @@ function isFeatureIdDefined(value) {
   return value !== undefined && value !== null && value !== '';
 }
 
-function transformTileCoordsToWGS84(object, bbox, viewport) {
+function transformTileCoordsToWGS84(object, bbox, viewport: Viewport) {
   const feature = {
     ...object,
     geometry: {
@@ -357,6 +425,3 @@ function transformTileCoordsToWGS84(object, bbox, viewport) {
 
   return feature;
 }
-
-MVTLayer.layerName = 'MVTLayer';
-MVTLayer.defaultProps = defaultProps;

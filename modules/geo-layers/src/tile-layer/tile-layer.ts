@@ -152,8 +152,8 @@ export default class TileLayer<
     props,
     changeFlags
   }: {
-    props: TileLayerProps;
-    oldProps: TileLayerProps;
+    props: PropsT;
+    oldProps: PropsT;
     context: any;
     changeFlags: ChangeFlags;
   }) {
@@ -187,7 +187,7 @@ export default class TileLayer<
     this._updateTileset();
   }
 
-  _getTilesetOptions(props: TileLayerProps): Tileset2DProps {
+  _getTilesetOptions(props: PropsT): Tileset2DProps {
     const {
       tileSize,
       maxCacheSize,
@@ -298,7 +298,7 @@ export default class TileLayer<
     return this.props.renderSubLayers(props);
   }
 
-  getSubLayerPropsByTile(tile: Tile2DHeader): LayerProps | null {
+  getSubLayerPropsByTile(tile: Tile2DHeader): Partial<LayerProps> | null {
     return null;
   }
 
@@ -313,7 +313,7 @@ export default class TileLayer<
     }
   }
 
-  renderLayers(): Layer[] {
+  renderLayers(): Layer[] | null {
     assert(this.state);
     return this.state.tileset.tiles.map((tile: Tile2DHeader) => {
       const subLayerProps = this.getSubLayerPropsByTile(tile);
