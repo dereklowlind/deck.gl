@@ -106,12 +106,5 @@ export type {OrbitViewState} from './views/orbit-view';
 export type {OrthographicViewState} from './views/orthographic-view';
 export type {GlobeViewState} from './views/globe-view';
 export type {LayerContext} from './lib/layer-manager';
-export type {
-  LayerProps,
-  CompositeLayerProps,
-  Accessor,
-  LayerData,
-  Unit,
-  Position,
-  Color
-} from './types/layer-props';
+export type {UpdateParameters} from './lib/layer';
+export type {LayerProps, Accessor, LayerData, Unit, Position, Color} from './types/layer-props';
